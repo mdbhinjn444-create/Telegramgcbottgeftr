@@ -3,15 +3,7 @@ import datetime
 import random
 import sqlite3
 import asyncio
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
-
-# Logging setup
-import logging
-import datetime
-import random
-import sqlite3
-import asyncio
+import os  # পোর্ট হ্যান্ডেল করার জন্য নতুন ইম্পোর্ট
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
@@ -168,7 +160,6 @@ async def handle_all_callbacks(update: Update, context: ContextTypes.DEFAULT_TYP
         p = int(data.split("_")[1])
         await show_page(update, context, page=p)
     elif data == "page_total":
-        # Handle "Last" page logic
         conn = sqlite3.connect('vanila_exchange.db')
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM cards WHERE status='available'")
@@ -188,7 +179,6 @@ async def handle_all_callbacks(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # --- Main Entry Point ---
 async def main():
-    # Database Initialization
     init_db()
     conn = sqlite3.connect('vanila_exchange.db')
     c = conn.cursor()
@@ -197,35 +187,37 @@ async def main():
         generate_daily_cards()
     conn.close()
 
-    # Application Setup
     app = Application.builder().token(BOT_TOKEN).build()
-
-    # Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("listings", lambda u, c: show_page(u, c, 1)))
     app.add_handler(CallbackQueryHandler(handle_all_callbacks))
 
     print(f"Bot started successfully!")
     
-    # This is the crucial part for Render/Python 3.10+
+    # Render-এর পোর্ট এরর এড়ানোর জন্য এই অংশটুকু যোগ করা হয়েছে
+    # এটি একটি ফেক সার্ভার হিসেবে কাজ করবে যাতে রেন্ডার মনে করে আপনার পোর্ট রেডি
+    import http.server
+    import socketserver
+    import threading
+
+    def run_fake_server():
+        port = int(os.environ.get("PORT", 8080))
+        handler = http.server.SimpleHTTPRequestHandler
+        with socketserver.TCPServer(("", port), handler) as httpd:
+            httpd.serve_forever()
+
+    threading.Thread(target=run_fake_server, daemon=True).start()
+
     async with app:
         await app.initialize()
         await app.start()
         await app.updater.start_polling()
-        # Keep the bot running
         await asyncio.Event().wait()
 
 if __name__ == "__main__":
     try:
-        # Check if an event loop is already running
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # For environments that already have a loop
-            asyncio.ensure_future(main())
-        else:
-            asyncio.run(main())
+        # রেন্ডার এবং পাইথন ৩.১০+ এর জন্য একদম সঠিক পদ্ধতি
+        asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         pass
-    except RuntimeError:
-        # Fallback for certain server environments
-        asyncio.get_event_loop().run_until_complete(main())
+    
