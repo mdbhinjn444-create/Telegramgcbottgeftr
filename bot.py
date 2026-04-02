@@ -6,6 +6,9 @@ import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
+# Logging setup
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+
 BOT_TOKEN = "8312816041:AAEVEH0u7PL-MELnS3M0KhMGn84y-NBchvY"
 ADMIN_USER = "@vanilarefu"
 MAINTENANCE_START = datetime.time(3, 0)
@@ -40,15 +43,13 @@ def generate_daily_cards():
     cursor.execute("DELETE FROM cards")
     
     cards = []
+    # logic unchanged
     for _ in range(random.randint(10, 12)):
         cards.append(('409758xx', 500.00, 'USD', ''))
-    
     for _ in range(random.randint(20, 30)):
         cards.append((random.choice(['432465xx', '511332xx']), 20.00, 'USD', '🔄'))
-
     for _ in range(random.randint(15, 20)):
         cards.append(('533985xx', round(random.uniform(0.10, 0.99), 2), 'CAD', '🅶'))
-
     while len(cards) < 250:
         cards.append(('403446xx', round(random.uniform(5, 40), 2), 'USD', ''))
 
@@ -81,6 +82,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_page(update: Update, context: ContextTypes.DEFAULT_TYPE, page=1):
     query = update.callback_query
+    if query: await query.answer()
     
     conn = sqlite3.connect('vanila_exchange.db')
     cursor = conn.cursor()
@@ -89,7 +91,9 @@ async def show_page(update: Update, context: ContextTypes.DEFAULT_TYPE, page=1):
     conn.close()
 
     if not all_cards:
-        await query.edit_message_text("No cards in stock! Please wait for update at 3:10 AM.")
+        msg = "No cards in stock! Please wait for update at 3:10 AM."
+        if query: await query.edit_message_text(msg)
+        else: await update.message.reply_text(msg)
         return
 
     cards_per_page = 10
@@ -126,7 +130,10 @@ async def show_page(update: Update, context: ContextTypes.DEFAULT_TYPE, page=1):
          InlineKeyboardButton("🔍 Filters", callback_data="filters")]
     ]
 
-    await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(buttons + [nav] + footer_menu), parse_mode="Markdown")
+    if query:
+        await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(buttons + [nav] + footer_menu), parse_mode="Markdown")
+    else:
+        await update.message.reply_text(response, reply_markup=InlineKeyboardMarkup(buttons + [nav] + footer_menu), parse_mode="Markdown")
 
 async def deposit_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -149,21 +156,18 @@ async def handle_all_callbacks(update: Update, context: ContextTypes.DEFAULT_TYP
     if data.startswith("page_"):
         p = int(data.split("_")[1])
         await show_page(update, context, page=p)
-    
     elif data == "deposit":
         await deposit_handler(update, context)
-        
     elif data == "dep_confirm":
         await query.message.reply_text("Please enter the amount....... (🔄 Loading)")
-        
     elif data.startswith("buy_"):
         await query.answer("Insufficient balance, please deposit", show_alert=True)
-
     elif data == "dep_cancel":
         await query.message.delete()
         await query.message.reply_text("Deposit request has been canceled.❌")
 
-def main():
+async def main():
+    # Database Initialization
     init_db()
     conn = sqlite3.connect('vanila_exchange.db')
     c = conn.cursor()
@@ -172,6 +176,7 @@ def main():
         generate_daily_cards()
     conn.close()
 
+    # Application Setup
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -179,7 +184,16 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_all_callbacks))
 
     print("Bot starting with token: " + BOT_TOKEN[:10] + "...")
-    app.run_polling()
+    
+    # Correct way to run on modern python environments
+    async with app:
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling()
+        await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
