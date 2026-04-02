@@ -7,8 +7,18 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 # Logging setup
+import logging
+import datetime
+import random
+import sqlite3
+import asyncio
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+
+# Logging setup
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
+# --- Configuration ---
 BOT_TOKEN = "8312816041:AAEVEH0u7PL-MELnS3M0KhMGn84y-NBchvY"
 ADMIN_USER = "@vanilarefu"
 MAINTENANCE_START = datetime.time(3, 0)
@@ -23,6 +33,7 @@ DEPOSIT_ADDRESSES = [
     "UQC9OvldFlHMbxKRq-6yRTm9uWv-YWFcsywHQAZz6p9dtonc"
 ]
 
+# --- Database Logic ---
 def init_db():
     conn = sqlite3.connect('vanila_exchange.db')
     cursor = conn.cursor()
@@ -43,7 +54,6 @@ def generate_daily_cards():
     cursor.execute("DELETE FROM cards")
     
     cards = []
-    # logic unchanged
     for _ in range(random.randint(10, 12)):
         cards.append(('409758xx', 500.00, 'USD', ''))
     for _ in range(random.randint(20, 30)):
@@ -57,6 +67,7 @@ def generate_daily_cards():
     conn.commit()
     conn.close()
 
+# --- Handler Functions ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_maintenance():
         await update.message.reply_text("⚠️ The bot is currently updating, please wait until 3:10 AM.")
@@ -121,7 +132,7 @@ async def show_page(update: Update, context: ContextTypes.DEFAULT_TYPE, page=1):
         InlineKeyboardButton("First↩️", callback_data="page_1"),
         InlineKeyboardButton("⬅️Back", callback_data=f"page_{max(1, page-1)}"),
         InlineKeyboardButton("Next➡️", callback_data=f"page_{min(total_pages, page+1)}"),
-        InlineKeyboardButton("Last↪️", callback_data=f"page_{total_pages}")
+        InlineKeyboardButton("Last↪️", callback_data="page_total")
     ]
     
     footer_menu = [
@@ -156,6 +167,15 @@ async def handle_all_callbacks(update: Update, context: ContextTypes.DEFAULT_TYP
     if data.startswith("page_"):
         p = int(data.split("_")[1])
         await show_page(update, context, page=p)
+    elif data == "page_total":
+        # Handle "Last" page logic
+        conn = sqlite3.connect('vanila_exchange.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM cards WHERE status='available'")
+        count = cursor.fetchone()[0]
+        conn.close()
+        last_page = (count + 9) // 10
+        await show_page(update, context, page=last_page)
     elif data == "deposit":
         await deposit_handler(update, context)
     elif data == "dep_confirm":
@@ -166,6 +186,7 @@ async def handle_all_callbacks(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.message.delete()
         await query.message.reply_text("Deposit request has been canceled.❌")
 
+# --- Main Entry Point ---
 async def main():
     # Database Initialization
     init_db()
@@ -179,21 +200,32 @@ async def main():
     # Application Setup
     app = Application.builder().token(BOT_TOKEN).build()
 
+    # Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("listings", lambda u, c: show_page(u, c, 1)))
     app.add_handler(CallbackQueryHandler(handle_all_callbacks))
 
-    print("Bot starting with token: " + BOT_TOKEN[:10] + "...")
+    print(f"Bot started successfully!")
     
-    # Correct way to run on modern python environments
+    # This is the crucial part for Render/Python 3.10+
     async with app:
         await app.initialize()
         await app.start()
         await app.updater.start_polling()
+        # Keep the bot running
         await asyncio.Event().wait()
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
+        # Check if an event loop is already running
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # For environments that already have a loop
+            asyncio.ensure_future(main())
+        else:
+            asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
         pass
+    except RuntimeError:
+        # Fallback for certain server environments
+        asyncio.get_event_loop().run_until_complete(main())
