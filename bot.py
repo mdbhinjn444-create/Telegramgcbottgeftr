@@ -3,18 +3,15 @@ import datetime
 import random
 import sqlite3
 import asyncio
-import os  # পোর্ট হ্যান্ডেল করার জন্য নতুন ইম্পোর্ট
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 # Logging setup
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 # --- Configuration ---
 BOT_TOKEN = "8312816041:AAEVEH0u7PL-MELnS3M0KhMGn84y-NBchvY"
-ADMIN_USER = "@vanilarefu"
-MAINTENANCE_START = datetime.time(3, 0)
-MAINTENANCE_END = datetime.time(3, 10)
 
 DEPOSIT_ADDRESSES = [
     "UQCgPsBnvSib5rYln5vK0rNfYo__xjfk5OD-0mKU7-n1ACnT",
@@ -36,176 +33,121 @@ def init_db():
     conn.commit()
     conn.close()
 
-def is_maintenance():
-    now = datetime.datetime.now().time()
-    return MAINTENANCE_START <= now <= MAINTENANCE_END
-
 def generate_daily_cards():
     conn = sqlite3.connect('vanila_exchange.db')
     cursor = conn.cursor()
     cursor.execute("DELETE FROM cards")
-    
+    all_bins = [('533985xx', 'CAD', '🅶'), ('461126xx', 'CAD', ''), ('373778xx', 'AUD', ''), ('435880xx', 'USD', '')] # সংক্ষেপিত লিস্ট
     cards = []
-    for _ in range(random.randint(10, 12)):
-        cards.append(('409758xx', 500.00, 'USD', ''))
-    for _ in range(random.randint(20, 30)):
-        cards.append((random.choice(['432465xx', '511332xx']), 20.00, 'USD', '🔄'))
-    for _ in range(random.randint(15, 20)):
-        cards.append(('533985xx', round(random.uniform(0.10, 0.99), 2), 'CAD', '🅶'))
-    while len(cards) < 250:
-        cards.append(('403446xx', round(random.uniform(5, 40), 2), 'USD', ''))
-
+    for _ in range(random.randint(250, 300)):
+        selected = random.choice(all_bins)
+        cards.append((selected[0], round(random.uniform(10, 500), 2), selected[1], selected[2]))
     cursor.executemany("INSERT INTO cards (bin, amount, currency, sticker) VALUES (?, ?, ?, ?)", cards)
     conn.commit()
     conn.close()
 
-# --- Handler Functions ---
+# --- Functions ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if is_maintenance():
-        await update.message.reply_text("⚠️ The bot is currently updating, please wait until 3:10 AM.")
-        return
-
     user = update.effective_user
-    conn = sqlite3.connect('vanila_exchange.db')
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (user_id, first_name) VALUES (?, ?)", (user.id, user.first_name))
-    conn.commit()
-    conn.close()
-
-    text = (f"⚡️ Welcome {user.first_name} to Vanila exchange! ⚡️\n"
-            "Sell, Buy, and strike deals in seconds!!\n"
-            "All types of cards are available here at best rates.\n"
-            "Current rate is 37%")
-    
-    keyboard = [
-        [InlineKeyboardButton("💳 Stock", callback_data="page_1")],
-        [InlineKeyboardButton("📞 Contact Admin", url="https://t.me/vanilarefu")]
-    ]
+    text = f"⚡️ Welcome {user.first_name} to Vanila exchange! ⚡️\nCurrent rate is 37%"
+    keyboard = [[InlineKeyboardButton("💳 Stock", callback_data="page_1")],
+                [InlineKeyboardButton("💰 Deposit", callback_data="deposit")]]
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def show_page(update: Update, context: ContextTypes.DEFAULT_TYPE, page=1):
-    query = update.callback_query
-    if query: await query.answer()
-    
-    conn = sqlite3.connect('vanila_exchange.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM cards WHERE status='available' ORDER BY amount DESC")
-    all_cards = cursor.fetchall()
-    conn.close()
-
-    if not all_cards:
-        msg = "No cards in stock! Please wait for update at 3:10 AM."
-        if query: await query.edit_message_text(msg)
-        else: await update.message.reply_text(msg)
-        return
-
-    cards_per_page = 10
-    total_pages = (len(all_cards) + cards_per_page - 1) // cards_per_page
-    start_idx = (page - 1) * cards_per_page
-    page_cards = all_cards[start_idx : start_idx + cards_per_page]
-    
-    page_total_balance = sum(c[2] for c in page_cards)
-
-    response = (f"⚡️ VANILA Exchange - Main Listings V2 ⚡️\n\n"
-                f"Your Balance:\n💵 USD: `$0.00` (Tap to copy)\n• TON : `0.000000` (`$0.00`)\n\n")
-    
-    buttons = []
-    for i, card in enumerate(page_cards, start=start_idx+1):
-        response += f"{i}. `{card[1]}` {card[3]}${card[2]} at 37% {card[4]}\n"
-        buttons.append([
-            InlineKeyboardButton(f"{card[1]}", callback_data="none"),
-            InlineKeyboardButton("🛒 Purchase", callback_data=f"buy_{card[0]}")
-        ])
-
-    response += (f"\nTotal Cards: {len(all_cards)} | Total Page Balance: ${page_total_balance:.2f}\n"
-                 f"Page: {page}/{total_pages} | Updated: {datetime.datetime.now().strftime('%H:%M')}")
-
-    nav = [
-        InlineKeyboardButton("First↩️", callback_data="page_1"),
-        InlineKeyboardButton("⬅️Back", callback_data=f"page_{max(1, page-1)}"),
-        InlineKeyboardButton("Next➡️", callback_data=f"page_{min(total_pages, page+1)}"),
-        InlineKeyboardButton("Last↪️", callback_data="page_total")
-    ]
-    
-    footer_menu = [
-        [InlineKeyboardButton("💰 Deposit", callback_data="deposit"), 
-         InlineKeyboardButton("Refresh🔂", callback_data=f"page_{page}"),
-         InlineKeyboardButton("🔍 Filters", callback_data="filters")]
-    ]
-
-    if query:
-        await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(buttons + [nav] + footer_menu), parse_mode="Markdown")
-    else:
-        await update.message.reply_text(response, reply_markup=InlineKeyboardMarkup(buttons + [nav] + footer_menu), parse_mode="Markdown")
-
-async def deposit_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    addr = random.choice(DEPOSIT_ADDRESSES)
-    
-    text = (f"⚡ VANILA Exchange — TON DEPOSIT ⚡\n\n"
-            f"Deposit Information: `{addr}`\n"
-            f"Minimum Deposit: `15 TON`\n\n"
-            f"Instructions:\n1. Send TON to address above.\n2. Wait for 1 confirmation.\n"
-            f"⚠️ Note: This session is active for 30 minutes.")
-    
-    kb = [[InlineKeyboardButton("Confirm ✅", callback_data="dep_confirm"),
-           InlineKeyboardButton("Cancel ⛔", callback_data="dep_cancel")]]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-
-async def handle_all_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
+    await query.answer()
 
-    if data.startswith("page_"):
-        p = int(data.split("_")[1])
-        await show_page(update, context, page=p)
-    elif data == "page_total":
-        conn = sqlite3.connect('vanila_exchange.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM cards WHERE status='available'")
-        count = cursor.fetchone()[0]
-        conn.close()
-        last_page = (count + 9) // 10
-        await show_page(update, context, page=last_page)
-    elif data == "deposit":
-        await deposit_handler(update, context)
+    if data == "deposit":
+        addr = random.choice(DEPOSIT_ADDRESSES)
+        context.user_data['active_addr'] = addr
+        text = (
+            f"⚡ VANILA Exchange — TON DEPOSIT ⚡\n\n"
+            f"Deposit Information: `{addr}`\n\n"
+            f"Minimum Deposit: `15` TON\n\n"
+            f"Instructions:\n"
+            f"1. Send your deposit to the address above.\n"
+            f"2. Wait for 1 confirmation.\n"
+            f"3. Your balance will update automatically.\n"
+            f"4. Please remember to send TON only through the TON Network. ✅\n\n"
+            f"⚠️ WARNING:\n"
+            f"- Deposits below the minimum amount will not be processed.\n"
+            f"- This address is valid only for your account. Do not share it.\n\n"
+            f"⚠️ Note: This deposit session is only active for 30 minutes. Please send your deposit before it expires."
+        )
+        kb = [[InlineKeyboardButton("Confirm ✅", callback_data="dep_confirm"),
+               InlineKeyboardButton("Cancel ⛔", callback_data="dep_cancel")]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
     elif data == "dep_confirm":
-        await query.message.reply_text("Please enter the amount....... (🔄 Loading)")
-    elif data.startswith("buy_"):
-        await query.answer("Insufficient balance, please deposit", show_alert=True)
+        context.user_data['step'] = 'waiting_amount'
+        await query.message.reply_text("Please enter the amount.......")
+
     elif data == "dep_cancel":
         await query.message.delete()
-        await query.message.reply_text("Deposit request has been canceled.❌")
+        await query.message.reply_text("Deposit request has been canceled.❌\nYou can now create a new deposit request.✅")
 
-# --- Main Entry Point ---
+async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    step = context.user_data.get('step')
+    text = update.message.text
+
+    if step == 'waiting_amount':
+        if text.isdigit() and int(text) >= 15:
+            context.user_data['amount'] = text
+            context.user_data['step'] = 'waiting_txid'
+            await update.message.reply_text("Submit withdraw Txid :")
+        else:
+            await update.message.reply_text("Minimum deposit is 15 TON. Please enter the correct amount like that 15, 16, 20")
+
+    elif step == 'waiting_txid':
+        txid = text
+        amount = context.user_data.get('amount')
+        addr = context.user_data.get('active_addr')
+        name = update.effective_user.first_name
+        order_no = random.randint(20991, 1000059)
+        time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        context.user_data['step'] = None # Reset
+        
+        response = (
+            f"NAME : `{name}`\n"
+            f"Address : `{addr}`\n"
+            f"AMOUNT : `{amount}`\n"
+            f"Txid : `{txid}`\n"
+            f"Order Number : `{order_no}`\n"
+            f"Stats : `Waiting...`\n"
+            f"TIME : `{time_str}`\n\n"
+            f"NOTE : Balance will be added within 1/2 minutes. If not added, contact customer care."
+        )
+        msg = await update.message.reply_text(response, parse_mode="Markdown")
+
+        # ৫০ সেকেন্ড পর Processing...
+        await asyncio.sleep(50)
+        response = response.replace("`Waiting...`", "`Processing....`")
+        await msg.edit_text(response, parse_mode="Markdown")
+
+        # আরও ৫৫ সেকেন্ড পর Error
+        await asyncio.sleep(55)
+        response = response.replace("`Processing....`", "`transaction could not be found.`")
+        await msg.edit_text(response, parse_mode="Markdown")
+
+# --- Main ---
 async def main():
     init_db()
-    conn = sqlite3.connect('vanila_exchange.db')
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM cards")
-    if c.fetchone()[0] == 0:
-        generate_daily_cards()
-    conn.close()
-
+    generate_daily_cards()
     app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("listings", lambda u, c: show_page(u, c, 1)))
-    app.add_handler(CallbackQueryHandler(handle_all_callbacks))
-
-    print(f"Bot started successfully!")
     
-    # Render-এর পোর্ট এরর এড়ানোর জন্য এই অংশটুকু যোগ করা হয়েছে
-    # এটি একটি ফেক সার্ভার হিসেবে কাজ করবে যাতে রেন্ডার মনে করে আপনার পোর্ট রেডি
-    import http.server
-    import socketserver
-    import threading
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(handle_callbacks))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_messages))
 
+    # Fake Server for Render
+    import http.server, socketserver, threading
     def run_fake_server():
         port = int(os.environ.get("PORT", 8080))
-        handler = http.server.SimpleHTTPRequestHandler
-        with socketserver.TCPServer(("", port), handler) as httpd:
+        with socketserver.TCPServer(("", port), http.server.SimpleHTTPRequestHandler) as httpd:
             httpd.serve_forever()
-
     threading.Thread(target=run_fake_server, daemon=True).start()
 
     async with app:
@@ -215,9 +157,4 @@ async def main():
         await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    try:
-        # রেন্ডার এবং পাইথন ৩.১০+ এর জন্য একদম সঠিক পদ্ধতি
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        pass
-    
+    asyncio.run(main())
